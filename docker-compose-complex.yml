@@ -1,0 +1,112 @@
+version: "3.7"
+
+########################### NETWORKS
+networks:
+  t2_proxy:
+    external:
+      name: t2_proxy
+  default:
+    driver: bridge
+
+########################### SERVICES
+services:
+# All services / apps go below this line
+
+# Traefik 2 - Reverse Proxy
+  traefik:
+    container_name: traefik
+    image: traefik:latest # the chevrotin tag refers to v2.2.x
+    restart: unless-stopped
+    domainname: ${DOMAINNAME}
+    hostname: ${DOMAINNAME}
+    env_file: .env
+    command: # CLI arguments
+      - --global.checkNewVersion=true
+      - --global.sendAnonymousUsage=true
+      - --entryPoints.http.address=:80
+      - --entryPoints.https.address=:443
+        # Allow these IPs to set the X-Forwarded-* headers - Cloudflare IPs: https://www.cloudflare.com/ips/
+#      - --entrypoints.https.forwardedHeaders.trustedIPs=173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/12,172.64.0.0/13,131.0.72.0/22
+      - --entryPoints.traefik.address=:8080
+      - --api=true
+#      - --api.insecure=true
+#      - --serversTransport.insecureSkipVerify=true
+      - --log=true
+      - --log.level=DEBUG # (Default: error) DEBUG, INFO, WARN, ERROR, FATAL, PANIC
+      - --accessLog=true
+      - --accessLog.filePath=/traefik.log
+      - --accessLog.bufferingSize=100 # Configuring a buffer of 100 lines
+      - --accessLog.filters.statusCodes=400-499
+      - --providers.docker=true
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
+      - --providers.docker.defaultrule=Host(`{{ index .Labels "com.docker.compose.service" }}.$DOMAINNAME`)
+      - --providers.docker.exposedByDefault=false
+      - --providers.docker.network=t2_proxy
+      - --providers.docker.swarmMode=false
+#      - --providers.file.directory=/rules # Load dynamic configuration from one or more .toml or .yml files in a directory.
+#      - --providers.file.filename=/path/to/file # Load dynamic configuration from a file.
+      - --providers.file.watch=true # Only works on top level files in the rules folder
+      - --certificatesResolvers.dns-cloudflare.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory # LetsEncrypt Staging Server - uncomment when testing
+      - --certificatesResolvers.dns-cloudflare.acme.email=$LETSENCRYPT_EMAIL
+      - --certificatesResolvers.dns-cloudflare.acme.storage=/acme/acme.json
+      - --certificatesResolvers.dns-cloudflare.acme.dnsChallenge.provider=godaddy
+#      - --certificatesResolvers.dns-cloudflare.acme.dnsChallenge.resolvers=1.1.1.1:53,1.0.0.1:53
+
+    networks:
+      - t2_proxy
+      - default
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - ./rules:/rules 
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      #- F:/Docker_volumes/teamcity/acme:/acme
+      - acmestuff:/acme
+      - F:/Docker_volumes/teamcity/traefik2:/traefik.log 
+      - acmestuff:/shared
+    environment:
+      - GODADDY_EMAIL=${GODADDY_EMAIL}
+      - GODADDY_API_KEY=${GODADDY_API_KEY}
+      - GODADDY_API_SECRET=${GODADDY_API_SECRET}
+    labels:
+      - "traefik.enable=true"
+      # HTTP-to-HTTPS Redirect
+      - "traefik.http.routers.http-catchall.entrypoints=http"
+      - "traefik.http.routers.http-catchall.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catchall.middlewares=redirect-to-https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      # HTTP Routers
+      - "traefik.http.routers.traefik-rtr.entrypoints=https"
+      - "traefik.http.routers.traefik-rtr.rule=Host(`traefik.brunobozic.com`)"
+      - "traefik.http.routers.traefik-rtr.tls=true"
+      - "traefik.http.routers.traefik-rtr.tls.certresolver=dns-cloudflare" # Comment out this line after first run of traefik to force the use of wildcard certs
+      - "traefik.http.routers.traefik-rtr.tls.domains[0].main=www.brunobozic.com"
+      - "traefik.http.routers.traefik-rtr.tls.domains[0].sans=*.brunobozic.com"
+#      - "traefik.http.routers.traefik-rtr.tls.domains[1].main=$SECONDDOMAINNAME" # Pulls main cert for second domain
+#      - "traefik.http.routers.traefik-rtr.tls.domains[1].sans=*.$SECONDDOMAINNAME" # Pulls wildcard cert for second domain
+      ## Services - API
+      - "traefik.http.routers.traefik-rtr.service=api@internal"
+      ## Middlewares
+      # - "traefik.http.routers.traefik-rtr.middlewares=middlewares-basic-auth@file" 
+
+  whoami:
+    image: "containous/whoami"
+    container_name: "simple-service"
+    hostname: ${DOMAINNAME}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`www.brunobozic.com`)"
+      - "traefik.http.routers.whoami.tls=true"
+      - "traefik.http.routers.whoami.entrypoints=https"
+      - "traefik.http.routers.whoami.tls.certresolver=dns-cloudflare"
+    networks:
+        - t2_proxy
+        - default
+volumes:
+  acmestuff:
+    external: true
+      

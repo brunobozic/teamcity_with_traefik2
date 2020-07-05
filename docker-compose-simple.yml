@@ -1,0 +1,115 @@
+version: '3.7'
+
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: always
+    env_file: .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - acmestuff:/tls-certificates
+      - F:/Docker_volumes/teamcity/traefik2/rules:/rules
+      - F:/Docker_volumes/teamcity/traefik2/traefiklog:/traefik.log
+    ports:
+      # http
+      - 80:80
+      # https
+      - 443:443
+      - target: 8282
+        published: 8282
+        protocol: tcp
+        mode: host
+    command:
+      - --api=true
+      - --api.insecure=true
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --entrypoints.webinsecure.address=:80
+      - --entrypoints.websecure.address=:443
+      - --entryPoints.traefik.address=:8282
+      # --certificatesresolvers.<name> Certificates resolvers configuration
+      # ACME V2 supports wildcard certificates.
+      # Wildcard certificates can only be generated through a DNS-01 challenge.
+      # - --certificatesresolvers.wildcard-godaddy.acme.tlschallenge=true
+      # - --certificatesResolvers.wildcard-godaddy.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory # LetsEncrypt Staging Server - uncomment when testing
+      # - --certificatesresolvers.wildcard-godaddy.acme.httpchallenge=true
+      # - --certificatesresolvers.wildcard-godaddy.acme.httpchallenge.entrypoint=webinsecure
+      - --certificatesResolvers.wildcard-godaddy.acme.dnsChallenge.provider=godaddy
+      - --certificatesResolvers.wildcard-godaddy.acme.dnsChallenge.delayBeforeCheck=0
+      # Email address used for registration.
+      - --certificatesresolvers.wildcard-godaddy.acme.email=$LETSENCRYPT_EMAIL
+      # Certificates storage
+      - --certificatesresolvers.wildcard-godaddy.acme.storage=/tls-certificates/acme.json
+    # healthcheck:
+    #   test: ["CMD", "traefik", "healthcheck"]
+    #   interval: 15s
+    #   timeout: 10s
+    #   retries: 10
+    #   start_period: 1m
+
+    networks:
+      - proxy
+    environment:
+      - GODADDY_EMAIL=${GODADDY_EMAIL}
+      - GODADDY_API_KEY=${GODADDY_API_KEY}
+      - GODADDY_API_SECRET=${GODADDY_API_SECRET}
+    labels:
+
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.entrypoints=webinsecure"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.brunobozic.com`)"
+
+      - "traefik.http.middlewares.traefik-auth.basicauth.users=${HTTP_USERNAME}:${HTTP_USERNAME}"
+      - "traefik.http.middlewares.traefik-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.traefik.middlewares=traefik-https-redirect"
+
+      - "traefik.http.routers.traefik-secure.entrypoints=websecure"
+      - "traefik.http.routers.traefik-secure.rule=Host(`traefik.brunobozic.com`)"
+      - "traefik.http.routers.traefik-secure.middlewares=traefik-auth"
+      - "traefik.http.routers.traefik-secure.tls=true"
+      - "traefik.http.routers.traefik-secure.tls.certresolver=wildcard-godaddy"
+      - "traefik.http.routers.traefik-secure.tls.domains[0].main=brunobozic.com"
+      - "traefik.http.routers.traefik-secure.tls.domains[0].sans=*.brunobozic.com"
+      #- "traefik.http.routers.traefik-secure.service=api@internal"
+
+      - "traefik.http.routers.traefik.service=api@internal"
+  portainer:
+      image: portainer/portainer
+      container_name: portainer
+      env_file: .env
+      restart: always
+      command: -H unix:///var/run/docker.sock
+      ports:
+        - "9090:9000"
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+        - ./portainer/portainer/data:/data
+        - ./portainer/shared:/shared
+      environment:
+        - TZ=${TZ}
+      networks:
+        - proxy
+      labels:
+        - "traefik.enable=true"
+        ## HTTP Routers
+        - "traefik.http.routers.portainer-rtr.entrypoints=websecure"
+        - "traefik.http.routers.portainer-rtr.rule=Host(`portainer.brunobozic.com`)"
+        - "traefik.http.routers.portainer-rtr.tls=true"
+        ## Middlewares
+  #      - "traefik.http.routers.portainer-rtr.middlewares=chain-no-auth@file" # No Authentication
+  #      - "traefik.http.routers.portainer-rtr.middlewares=chain-basic-auth@file" # Basic Authentication
+  #      - "traefik.http.routers.portainer-rtr.middlewares=chain-oauth@file" # Google OAuth 2.0
+        ## HTTP Services
+        - "traefik.http.routers.portainer-rtr.service=portainer-svc"
+        - "traefik.http.services.portainer-svc.loadbalancer.server.port=9000"
+
+networks:
+  proxy:
+    external: true
+volumes:
+  acmestuff:
+    external: true    
+    

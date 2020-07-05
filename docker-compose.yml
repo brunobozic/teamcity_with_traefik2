@@ -1,0 +1,199 @@
+version: '3.7'
+
+services:
+  server:
+    image: jetbrains/teamcity-server:latest
+    networks:
+      - web
+      - default
+    volumes:
+      - F:/Docker_volumes/teamcity_server/datadir:/data/teamcity_server/datadir
+      - F:/Docker_volumes/teamcity_server/logs:/opt/teamcity/logs
+#    hostname: ${TC_VIRTUAL_HOST}
+    ports:
+      - "8111:8111"
+    depends_on:
+      - postgres
+    env_file: .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.backend=teamcity"
+#      - "traefik.frontend.rule=Host:${TC_VIRTUAL_HOST}"
+      - "traefik.frontend.rule=Host:teamcity.${DOMAINNAME}"  
+      - "traefik.docker.network=web"
+      - "traefik.port=8111"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  agent:
+    build: ./agents/dotnetcore3
+    env_file: .env
+    depends_on:
+      - redis
+    #     if you need docker inside the agent
+    #     (http://jpetazzo.github.io/2015/09/03/do-not-use-docker-in-docker-for-ci/)
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - "traefik.enable=false"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  postgres:
+    build: ./postgres
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - F:/Docker_volumes/teamcity_server/postgresql/backups:/backups
+    env_file: .env
+    labels:
+      - "traefik.enable=false"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  redis:
+    image: redis:3.2
+    labels:
+      - "traefik.enable=false"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+#  traefik:
+#    build: ./traefik
+#    restart: on-failure
+#    command:
+#      - --logLevel=ERROR
+#      - --docker
+#      - --docker.watch=true
+#      - --docker.exposedByDefault=false
+#      - --docker.domain=${VIRTUAL_HOST}
+#      - --defaultEntryPoints=http,https
+#      - --entryPoints=Name:http Address::80 Redirect.EntryPoint:https
+#      - --entryPoints=Name:https Address::443 TLS
+#      - --acme=true
+#      - --acme.domains=${LETSENCRYPT_HOST}
+#      - --acme.email=${LETSENCRYPT_EMAIL}
+#      - --acme.storage=/etc/cert/acme.json
+#      - --acme.OnHostRule=false
+#      - --acme.onDemand=false
+#      - --acme.entryPoint=https
+#      - --acme.httpChallenge
+#      - --acme.httpChallenge.entryPoint=http
+#    ports:
+#      - "80:80"
+#      - "443:443"
+#    networks:
+#      - web
+#    volumes:
+#      - ./acme.json:/acme.json
+#      - /var/run/docker.sock:/var/run/docker.sock
+#    logging:
+#      driver: json-file
+#      options:
+#        max-size: "10m"
+#        max-file: "5"
+
+  traefik:
+    hostname: traefik
+    build: ./traefik
+    container_name: traefik
+    env_file: .env
+    restart: always
+    command:
+      - --logLevel=DEBUG
+    domainname: ${DOMAINNAME}
+    networks:
+      - default
+      - web
+#      - t1_proxy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    environment:
+      - GODADDY_EMAIL=${GODADDY_EMAIL}
+      - GODADDY_API_KEY=${GODADDY_API_KEY}
+      - GODADDY_API_SECRET=${GODADDY_SECRET}
+    labels:
+      - "traefik.enable=true"
+      - "traefik.backend=traefik"
+      - "traefik.frontend.rule=Host:traefik.${DOMAINNAME}"  
+#      - "traefik.frontend.rule=Host:${DOMAINNAME}; PathPrefixStrip: /traefik"
+      - "traefik.port=8080"
+      - "traefik.docker.network=web"
+      - "traefik.frontend.headers.SSLRedirect=true"
+      - "traefik.frontend.headers.STSSeconds=315360000"
+      - "traefik.frontend.headers.browserXSSFilter=true"
+      - "traefik.frontend.headers.contentTypeNosniff=true"
+      - "traefik.frontend.headers.forceSTSHeader=true"
+      - "traefik.frontend.headers.SSLHost=example.com"
+      - "traefik.frontend.headers.STSIncludeSubdomains=true"
+      - "traefik.frontend.headers.STSPreload=true"
+#      - "traefik.frontend.headers.frameDeny: true" #customFrameOptionsValue overrides this
+      - "traefik.frontend.headers.customFrameOptionsValue: allow-from https:${DOMAINNAME}"
+#      - "traefik.frontend.auth.basic.users=${HTTP_USERNAME}:${HTTP_PASSWORD}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./traefikout/traefik:/etc/traefik
+      - ./traefikout/shared:/shared
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  portainer:
+    image: portainer/portainer
+    container_name: portainer
+    env_file: .env
+    restart: always
+    command: -H unix:///var/run/docker.sock
+#    ports:
+#      - "XXXX:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./portainer/portainer/data:/data
+      - ./portainer/shared:/shared
+    environment:
+      - TZ=${TZ}
+    networks:
+      - t1_proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.backend=portainer"
+      - "traefik.frontend.rule=Host:portainer.${DOMAINNAME}"  
+#      - "traefik.frontend.rule=Host:${DOMAINNAME}; PathPrefixStrip: /portainer"
+      - "traefik.port=9000"
+      - "traefik.docker.network=t1_proxy"
+      - "traefik.frontend.headers.SSLRedirect=true"
+      - "traefik.frontend.headers.STSSeconds=315360000"
+      - "traefik.frontend.headers.browserXSSFilter=true"
+      - "traefik.frontend.headers.contentTypeNosniff=true"
+      - "traefik.frontend.headers.forceSTSHeader=true"
+      - "traefik.frontend.headers.SSLHost=example.com"
+      - "traefik.frontend.headers.STSIncludeSubdomains=true"
+      - "traefik.frontend.headers.STSPreload=true"
+#      - "traefik.frontend.headers.frameDeny: true" #customFrameOptionsValue overrides this
+      - "traefik.frontend.headers.customFrameOptionsValue: allow-from https:${DOMAINNAME}"
+
+networks:
+  web:
+    external: true
+  t1_proxy:
+    external: true
+  default:
+    driver: bridge
+volumes:
+  pgdata:
+     external: true
